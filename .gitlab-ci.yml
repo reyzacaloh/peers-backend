@@ -1,0 +1,136 @@
+---
+image: python:3.9
+
+include:
+  - template: Code-Quality.gitlab-ci.yml
+  - template: SAST.gitlab-ci.yml
+
+stages:
+  - test
+  - sonar
+  - deploy
+  - code_quality
+
+variables:
+  PIP_CACHE_DIR: "$CI_PROJECT_DIR/.cache/pip"
+
+.coverage_artifacts: &coverage_artifacts
+  artifacts:
+    paths:
+      - .coverage*
+
+cache:
+  paths:
+    - .cache/pip
+
+tests:
+  stage: test
+  coverage: '/(?i)total.*? (100(?:\.0+)?\%|[1-9]?\d(?:\.\d+)?\%)$/'
+  before_script:
+    - pip install -r requirements.txt
+    - pip install pytest pytest-cov
+    - python manage.py makemigrations
+    - python manage.py migrate
+    - python manage.py collectstatic --no-input
+    - python manage.py runserver &
+  when: on_success
+  script:
+    - coverage run -m pytest
+    - coverage report
+    - coverage xml
+  artifacts:
+    paths:
+      - coverage.xml
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+    expire_in: 1 days
+  
+code_quality:
+  stage: test
+  artifacts:
+    expose_as: 'Code Quality Report'
+    paths: [gl-code-quality-report.json]
+    expire_in: 1 days
+  allow_failure: true
+
+code_quality_html:
+  stage: test
+  extends: code_quality
+  variables:
+    REPORT_FORMAT: html
+  artifacts:
+    expose_as: 'Code Quality Report HTML'
+    paths: [gl-code-quality-report.html]
+    expire_in: 1 days
+
+sast:
+  stage: test
+  artifacts:
+    reports:
+      sast: gl-sast-report.json
+    expire_in: 1 days
+  rules:
+    - when: never
+  variables:
+    SEARCH_MAX_DEPTH: 4
+    SAST_EXCLUDED_PATHS: "**/static/**,**/tests/**"
+    SAST_BANDIT_EXCLUDED_PATHS: "**/static/**,**/tests/**"
+  script:
+    - echo "$CI_JOB_NAME is used for configuration only, and its script should not be executed"
+    - exit 1
+
+sonarqube:
+  image: sonarsource/sonar-scanner-cli:latest
+  stage: sonar
+  needs:
+    - tests
+  variables:
+    SONAR_USER_HOME: "${CI_PROJECT_DIR}/.sonar"  # Defines the location of the analysis task cache
+    GIT_DEPTH: "0"  # Tells git to fetch all the branches of the project, required by the analysis task
+  cache:
+    key: "${CI_JOB_NAME}"
+    paths:
+      - .sonar/cache
+  dependencies:
+    - tests
+  script:
+    - sonar-scanner -Dsonar.login=$SONAR_LOGIN -Dsonar.projectKey=$SONAR_PROJECT_KEY
+  allow_failure: true
+
+deploy-production:
+  stage: deploy
+  image: ubuntu
+  needs:
+    - tests
+  only:
+    - master
+  environment:
+    name: production
+  before_script:
+    - apt -y update
+    - apt -y upgrade
+    - apt-get install -y curl
+  script:
+    - curl -fsSL https://railway.app/install.sh | sh
+    - railway link $PROD_PROJECT_ID --environment production
+    - railway up --service=$RAILWAY_SERVICE_PROD -d
+
+deploy-dev:
+  stage: deploy
+  needs:
+    - tests
+  only:
+    - staging
+    - coldfix
+  environment:
+    name: staging
+  before_script:
+    - apt -y update
+    - apt -y upgrade
+    - apt-get install -y curl
+  script:
+    - curl -fsSL https://railway.app/install.sh | sh
+    - railway link $STAGING_PROJECT_ID --environment production
+    - railway up --service=$RAILWAY_SERVICE_DEV -d
