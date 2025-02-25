@@ -23,10 +23,8 @@ class AuthUserRegistrationView(APIView):
     permission_classes = (OnlyAnon, )
 
     def post(self, request):
-        print(request.data)
         serializer = self.serializer_class(data=request.data)
         valid = serializer.is_valid(raise_exception=True)
-        print(valid)
         if valid:
             serializer.save()
             status_code = status.HTTP_201_CREATED
@@ -72,12 +70,11 @@ class UserManagement(APIView):
             'message': 'User data fetched',
             'user': serializer.data,
         }
-        print(response['user'])
+
        
         tutor = Tutor.objects.prefetch_related('uid').filter(uid = user)
         if tutor:
             tutor_serializer = GetTutorSerializer(tutor, many=True)
             response['tutor'] = tutor_serializer.data[0]
-            print(tutor_serializer.data[0])
             
         return Response(response, status=status.HTTP_200_OK)
